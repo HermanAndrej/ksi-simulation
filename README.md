@@ -103,8 +103,9 @@ A simulation of Keyless Signature Infrastructure (KSI) using Merkle trees to dem
 
 ## File Structure
 
+```plaintext
 ksi-simulation/
-├── app.py # Main application code
-├── commits.json # Persisted commit data (auto-generated)
-├── README.md # This documentation
-└── requirements.txt # Dependencies
+├── app.py            # Main application code
+├── commits.json      # Persisted commit data (auto-generated)
+├── README.md         # This documentation
+└── requirements.txt  # Dependencies
