@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>KSI Simulation</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 700px;
+      margin: 30px auto;
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 10px;
+    }
+    input, button {
+      padding: 8px;
+      margin: 6px 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    button {
+      cursor: pointer;
+    }
+    #output {
+      background: white;
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin-top: 15px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    label {
+      font-weight: bold;
+      margin-top: 12px;
+      display: block;
+    }
+    a {
+      color: #1a0dab;
+    }
+  </style>
+</head>
+<body>
+  <h1>KSI Simulation App Frontend</h1>
+
+  <section>
+    <label for="fileInput">Select a file to submit:</label>
+    <input type="file" id="fileInput" />
+    <button id="submitBtn">Submit File</button>
+  </section>
+
+  <section>
+    <button id="commitBtn">Commit Batch (Create Merkle Tree)</button>
+  </section>
+
+  <section>
+    <label for="verifyInput">Verify file hash inclusion:</label>
+    <input type="text" id="verifyInput" placeholder="Enter hash here" />
+    <button id="verifyBtn">Verify Hash</button>
+  </section>
+
+  <section>
+    <button id="showTreeBtn">Show Merkle Tree Visualization</button>
+  </section>
+
+  <div id="output"></div>
+
+  <script>
+    const output = document.getElementById('output');
+    const apiBase = 'http://localhost:8000';
+
+    document.getElementById('submitBtn').onclick = async () => {
+      const fileInput = document.getElementById('fileInput');
+      if (!fileInput.files.length) {
+        alert('Please select a file to submit');
+        return;
+      }
+      const file = fileInput.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+
+      output.textContent = 'Submitting file...';
+
+      try {
+        const resp = await fetch(apiBase + '/submit', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          output.textContent = `File submitted!\nHash: ${data.hash}\nBatch position: ${data.batch_position}`;
+        } else {
+          output.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
+        }
+      } catch (e) {
+        output.textContent = 'Network error: ' + e.message;
+      }
+    };
+
+    document.getElementById('commitBtn').onclick = async () => {
+      output.textContent = 'Committing batch...';
+      try {
+        const resp = await fetch(apiBase + '/commit', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+          output.textContent = `Batch committed!\nMerkle Root: ${data.merkle_root}\nTimestamp: ${data.timestamp}`;
+        } else {
+          output.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
+        }
+      } catch (e) {
+        output.textContent = 'Network error: ' + e.message;
+      }
+    };
+
+    document.getElementById('verifyBtn').onclick = async () => {
+      const hash = document.getElementById('verifyInput').value.trim();
+      if (!hash) {
+        alert('Enter a file hash to verify');
+        return;
+      }
+      output.textContent = 'Verifying hash inclusion...';
+      try {
+        const resp = await fetch(`${apiBase}/verify/${hash}`);
+        const data = await resp.json();
+        if (resp.ok) {
+          if (data.valid) {
+            output.textContent = `Hash is VALID in batch!\nMerkle Root: ${data.merkle_root}\nTimestamp: ${data.timestamp}\nProof:\n${data.proof.join('\n')}`;
+          } else {
+            output.textContent = `Hash INVALID: ${data.reason}`;
+          }
+        } else {
+          output.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
+        }
+      } catch (e) {
+        output.textContent = 'Network error: ' + e.message;
+      }
+    };
+
+    document.getElementById('showTreeBtn').onclick = () => {
+      window.open(apiBase + '/tree', '_blank');
+    };
+  </script>
+</body>
+</html>
