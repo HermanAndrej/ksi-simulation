@@ -36,13 +36,25 @@
       margin-top: 12px;
       display: block;
     }
-    a {
+    a, button.download-proof {
       color: #1a0dab;
+      background: none;
+      border: none;
+      padding: 0;
+      text-decoration: underline;
+      font-size: 1em;
+      cursor: pointer;
+    }
+    .inline-button {
+      width: auto;
+      display: inline-block;
+      margin-left: 8px;
+      vertical-align: middle;
     }
   </style>
 </head>
 <body>
-  <h1>KSI Simulation App Frontend</h1>
+  <h1>KSI Simulation</h1>
 
   <section>
     <label for="fileInput">Select a file to submit:</label>
@@ -57,11 +69,17 @@
   <section>
     <label for="verifyInput">Verify file hash inclusion:</label>
     <input type="text" id="verifyInput" placeholder="Enter hash here" />
-    <button id="verifyBtn">Verify Hash</button>
+    <button id="verifyBtn" style="width:auto;">Verify Hash</button>
+    <button id="downloadProofBtn" class="inline-button" disabled>Download Proof Token</button>
   </section>
 
   <section>
     <button id="showTreeBtn">Show Merkle Tree Visualization</button>
+  </section>
+
+  <!-- New Commit History Section -->
+  <section>
+    <button id="historyBtn">Show Commit History (Audit Trail)</button>
   </section>
 
   <div id="output"></div>
@@ -70,7 +88,15 @@
     const output = document.getElementById('output');
     const apiBase = 'http://localhost:8000';
 
-    document.getElementById('submitBtn').onclick = async () => {
+    const submitBtn = document.getElementById('submitBtn');
+    const commitBtn = document.getElementById('commitBtn');
+    const verifyBtn = document.getElementById('verifyBtn');
+    const downloadProofBtn = document.getElementById('downloadProofBtn');
+    const showTreeBtn = document.getElementById('showTreeBtn');
+    const historyBtn = document.getElementById('historyBtn');
+    const verifyInput = document.getElementById('verifyInput');
+
+    submitBtn.onclick = async () => {
       const fileInput = document.getElementById('fileInput');
       if (!fileInput.files.length) {
         alert('Please select a file to submit');
@@ -81,6 +107,7 @@
       formData.append('file', file);
 
       output.textContent = 'Submitting file...';
+      downloadProofBtn.disabled = true;
 
       try {
         const resp = await fetch(apiBase + '/submit', {
@@ -98,13 +125,14 @@
       }
     };
 
-    document.getElementById('commitBtn').onclick = async () => {
+    commitBtn.onclick = async () => {
       output.textContent = 'Committing batch...';
+      downloadProofBtn.disabled = true;
       try {
         const resp = await fetch(apiBase + '/commit', { method: 'POST' });
         const data = await resp.json();
         if (resp.ok) {
-          output.textContent = `Batch committed!\nMerkle Root: ${data.merkle_root}\nTimestamp: ${data.timestamp}`;
+          output.textContent = `Batch committed!\nMerkle Root: ${data.merkle_root}\nChained Root: ${data.chained_root}\nTimestamp: ${data.timestamp}`;
         } else {
           output.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
         }
@@ -113,32 +141,85 @@
       }
     };
 
-    document.getElementById('verifyBtn').onclick = async () => {
-      const hash = document.getElementById('verifyInput').value.trim();
+    let lastVerifiedHash = null;
+
+    verifyBtn.onclick = async () => {
+      const hash = verifyInput.value.trim();
       if (!hash) {
         alert('Enter a file hash to verify');
         return;
       }
       output.textContent = 'Verifying hash inclusion...';
+      downloadProofBtn.disabled = true;
+      lastVerifiedHash = null;
+
       try {
         const resp = await fetch(`${apiBase}/verify/${hash}`);
-        const data = await resp.json();
-        if (resp.ok) {
-          if (data.valid) {
-            output.textContent = `Hash is VALID in batch!\nMerkle Root: ${data.merkle_root}\nTimestamp: ${data.timestamp}\nProof:\n${data.proof.join('\n')}`;
-          } else {
-            output.textContent = `Hash INVALID: ${data.reason}`;
-          }
-        } else {
-          output.textContent = `Error: ${data.detail || JSON.stringify(data)}`;
+        if (!resp.ok) {
+          const errorData = await resp.json();
+          output.textContent = `Hash INVALID or not found:\n${errorData.detail || errorData.reason || JSON.stringify(errorData)}`;
+          return;
         }
+        const data = await resp.json();
+
+        // Show detailed proof info
+        output.textContent = 
+`Hash is VALID in batch!
+File Hash: ${data.file_hash}
+Batch Size: ${data.batch_size}
+Index in Batch: ${data.index}
+Merkle Root: ${data.merkle_root}
+Chained Root: ${data.chained_root}
+Previous Root: ${data.previous_root}
+Timestamp: ${data.timestamp}
+Proof Path:
+${data.proof.join('\n')}
+`;
+        lastVerifiedHash = hash;
+        downloadProofBtn.disabled = false;
       } catch (e) {
         output.textContent = 'Network error: ' + e.message;
       }
     };
 
-    document.getElementById('showTreeBtn').onclick = () => {
+    downloadProofBtn.onclick = () => {
+      if (!lastVerifiedHash) return;
+      const url = `${apiBase}/verify/${lastVerifiedHash}/token`;
+      // Download JSON proof token
+      window.open(url, '_blank');
+    };
+
+    showTreeBtn.onclick = () => {
       window.open(apiBase + '/tree', '_blank');
+    };
+
+    historyBtn.onclick = async () => {
+      output.textContent = 'Loading commit history...';
+      try {
+        const resp = await fetch(apiBase + '/history');
+        if (!resp.ok) {
+          const errorData = await resp.json();
+          output.textContent = `Error fetching history:\n${errorData.detail || JSON.stringify(errorData)}`;
+          return;
+        }
+        const data = await resp.json();
+        if (!data.commits || !data.commits.length) {
+          output.textContent = "No commit history found.";
+          return;
+        }
+        let text = "Commit History (Audit Trail):\n\n";
+        data.commits.forEach((commit, idx) => {
+          text += `Commit #${idx + 1}\n`;
+          text += `Timestamp: ${commit.timestamp}\n`;
+          text += `Batch Size: ${commit.batch_size}\n`;
+          text += `Merkle Root: ${commit.merkle_root}\n`;
+          text += `Chained Root: ${commit.chained_root}\n`;
+          text += "-----------------------------\n";
+        });
+        output.textContent = text;
+      } catch (e) {
+        output.textContent = 'Network error: ' + e.message;
+      }
     };
   </script>
 </body>

@@ -1,0 +1,106 @@
+# KSI Simulation App
+
+![KSI Architecture](https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/KSI_architecture.svg/800px-KSI_architecture.svg.png)
+
+A simulation of Keyless Signature Infrastructure (KSI) using Merkle trees to demonstrate blockchain-like timestamping and verification without relying on cryptographic keys.
+
+## Features
+
+- **File Submission**: Submit files to be hashed and added to a batch
+- **Batch Commitment**: Create Merkle trees from batches of hashes
+- **Chained Verification**: Each new root is chained to the previous root
+- **Proof Generation**: Generate Merkle proofs for file inclusion
+- **Visualization**: View Merkle tree structures
+- **Audit Trail**: Maintain full history of all commitments
+- **Proof Tokens**: Download verifiable proof tokens in JSON format
+
+## Technology Stack
+
+- **Backend**: Python 3.7+ with FastAPI
+- **Frontend**: HTML/CSS/JavaScript
+- **Cryptography**: SHA-256 hashing
+- **Persistence**: JSON file storage
+
+## Installation
+
+1. Clone the repository:
+
+    ```bash
+    git clone https://github.com/yourusername/ksi-simulation.git
+    cd ksi-simulation
+    ```
+
+2. Install dependencies:
+
+    ```bash
+    pip install fastapi uvicorn python-multipart
+    ```
+
+3. Run the server:
+
+    ```bash
+    uvicorn app:app --reload --port 8000
+    ```
+
+4. Access the web interface at:
+
+    ```
+    http://localhost:8000
+    ```
+
+## Usage Guide
+
+### 1. Submit Files
+
+- Select a file using the file picker
+- Click **Submit File**
+- The file hash and batch position will be displayed
+
+### 2. Commit Batches
+
+- Click **Commit Batch** when ready to process the current batch
+- A Merkle tree will be generated and chained to previous commits
+- Root hashes and timestamp will be displayed
+
+### 3. Verify Files
+
+- Enter a file hash in the verification field
+- Click **Verify Hash**
+- View Merkle proof and verification status
+- Download proof token as JSON
+
+### 4. View History
+
+- Click **Show Commit History** to see all previous commitments
+- View Merkle roots, timestamps, and chain relationships
+
+### 5. Visualize Trees
+
+- Click **Show Merkle Tree Visualization** to see the latest tree structure
+
+## API Endpoints
+
+| Endpoint               | Method | Description                   |
+|------------------------|--------|-------------------------------|
+| `/submit`              | POST   | Submit a file to current batch |
+| `/commit`              | POST   | Commit current batch to Merkle tree |
+| `/verify/{hash}`       | GET    | Verify file hash inclusion     |
+| `/verify/{hash}/token` | GET    | Download proof token           |
+| `/tree`                | GET    | Visualize Merkle tree          |
+| `/history`             | GET    | Get commit history             |
+
+## Security Considerations
+
+- Uses SHA-256 for cryptographic hashing
+- Chained root structure provides tamper evidence
+- CORS enabled for development (restrict in production)
+- All proofs are mathematically verifiable
+- No actual file content is stored — only hashes
+
+## File Structure
+
+ksi-simulation/
+├── app.py # Main application code
+├── commits.json # Persisted commit data (auto-generated)
+├── README.md # This documentation
+└── requirements.txt # Dependencies

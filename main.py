@@ -1,163 +1,169 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse
 from hashlib import sha256
 from datetime import datetime
-import json
 import os
+import json
 
 app = FastAPI(title="KSI Simulation App")
 
-origins = [
-    "http://localhost:8080"
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-DATA_PATH = "storage/data.json"
-BATCH = []
-TREE = {}
+BATCH = []  # Current batch of file hashes
+MERKLE_TREE = []  # Latest committed Merkle tree levels
+COMMITS_FILE = "commits.json"
 
+def load_commits():
+    if os.path.exists(COMMITS_FILE):
+        with open(COMMITS_FILE, "r") as f:
+            return json.load(f)
+    return []
 
-# Hash file content
-def hash_file_content(file_bytes: bytes) -> str:
-    return sha256(file_bytes).hexdigest()
+def save_commits(commits):
+    with open(COMMITS_FILE, "w") as f:
+        json.dump(commits, f, indent=2)
 
+# Load persistent commits on startup
+COMMITTED_BATCHES = load_commits()
 
-# Build Merkle Tree from list of hashes
-def build_merkle_tree(hashes: list[str]) -> dict:
+def hash_bytes(data: bytes) -> str:
+    return sha256(data).hexdigest()
+
+def build_merkle_tree(hashes):
     if not hashes:
-        return {"root": None, "layers": []}
-
-    layers = [hashes]
-    while len(layers[-1]) > 1:
-        current_layer = layers[-1]
-        next_layer = []
-        for i in range(0, len(current_layer), 2):
-            left = current_layer[i]
-            right = current_layer[i + 1] if i + 1 < len(current_layer) else left
+        return None, []
+    tree_levels = [hashes]
+    current_level = hashes
+    while len(current_level) > 1:
+        next_level = []
+        for i in range(0, len(current_level), 2):
+            left = current_level[i]
+            right = current_level[i + 1] if i + 1 < len(current_level) else current_level[i]
             combined = sha256((left + right).encode()).hexdigest()
-            next_layer.append(combined)
-        layers.append(next_layer)
+            next_level.append(combined)
+        tree_levels.append(next_level)
+        current_level = next_level
+    return current_level[0], tree_levels
 
-    return {"root": layers[-1][0], "layers": layers}
+def generate_merkle_proof(tree_levels, index):
+    proof = []
+    for level in tree_levels[:-1]:  # Skip root level
+        sibling_index = index + 1 if index % 2 == 0 else index - 1
+        if sibling_index < len(level):
+            proof.append(level[sibling_index])
+        else:
+            proof.append(level[index])  # Duplicate if no sibling
+        index = index // 2
+    return proof
 
-
-# Submit file for hashing and batching
 @app.post("/submit")
 async def submit_file(file: UploadFile = File(...)):
     content = await file.read()
-    file_hash = hash_file_content(content)
+    file_hash = hash_bytes(content)
+    batch_position = len(BATCH)
     BATCH.append(file_hash)
-    return {"hash": file_hash, "batch_position": len(BATCH) - 1}
+    return {"hash": file_hash, "batch_position": batch_position}
 
-
-# Commit batch into Merkle Tree
 @app.post("/commit")
 def commit_batch():
-    global TREE
-    if not BATCH:
-        raise HTTPException(status_code=400, detail="Batch is empty")
+    global BATCH, COMMITTED_BATCHES, MERKLE_TREE
 
-    TREE = build_merkle_tree(BATCH)
-    timestamp = datetime.utcnow().isoformat()
-    batch_data = {
+    if not BATCH:
+        raise HTTPException(status_code=400, detail="No files in batch to commit")
+
+    # Copy BATCH so we keep data consistent during processing
+    batch_to_commit = BATCH.copy()
+
+    merkle_root, tree_levels = build_merkle_tree(batch_to_commit)
+    timestamp = datetime.utcnow().isoformat() + "Z"
+    chained_root = sha256((merkle_root + (COMMITTED_BATCHES[-1]["chained_root"] if COMMITTED_BATCHES else "")).encode()).hexdigest()
+    batch_info = {
+        "merkle_root": merkle_root,
+        "chained_root": chained_root,
         "timestamp": timestamp,
-        "merkle_root": TREE["root"],
-        "batch": BATCH,
-        "tree": TREE
+        "batch_size": len(batch_to_commit),
+        "tree_levels": tree_levels
     }
 
-    os.makedirs("storage", exist_ok=True)
-    with open(DATA_PATH, "w") as f:
-        json.dump(batch_data, f, indent=2)
+    COMMITTED_BATCHES.append(batch_info)
+    save_commits(COMMITTED_BATCHES)
 
+    # Clear the batch after commit
     BATCH.clear()
-    return {"message": "Batch committed", "merkle_root": TREE["root"], "timestamp": timestamp}
 
+    MERKLE_TREE = tree_levels
+    return {
+        "merkle_root": merkle_root,
+        "chained_root": chained_root,
+        "timestamp": timestamp
+    }
 
-# Verify hash inclusion
 @app.get("/verify/{file_hash}")
 def verify_hash(file_hash: str):
-    if not os.path.exists(DATA_PATH):
-        raise HTTPException(status_code=404, detail="No committed batches found")
+    global COMMITTED_BATCHES
+    for batch_info in reversed(COMMITTED_BATCHES):
+        level0 = batch_info.get("tree_levels", [[]])[0]
+        if file_hash in level0:
+            index = level0.index(file_hash)
+            proof = generate_merkle_proof(batch_info["tree_levels"], index)
+            return {
+                "file_hash": file_hash,
+                "batch_size": batch_info["batch_size"],
+                "index": index,
+                "merkle_root": batch_info["merkle_root"],
+                "chained_root": batch_info["chained_root"],
+                "previous_root": COMMITTED_BATCHES[-2]["merkle_root"] if len(COMMITTED_BATCHES) > 1 else None,
+                "timestamp": batch_info["timestamp"],
+                "proof": proof
+            }
+    raise HTTPException(status_code=404, detail="Hash not found in any committed batch")
 
-    with open(DATA_PATH, "r") as f:
-        data = json.load(f)
+@app.get("/verify/{file_hash}/token")
+def download_proof_token(file_hash: str):
+    global COMMITTED_BATCHES
+    for batch_info in reversed(COMMITTED_BATCHES):
+        level0 = batch_info.get("tree_levels", [[]])[0]
+        if file_hash in level0:
+            index = level0.index(file_hash)
+            proof = generate_merkle_proof(batch_info["tree_levels"], index)
+            token = {
+                "file_hash": file_hash,
+                "merkle_root": batch_info["merkle_root"],
+                "proof": proof,
+                "timestamp": batch_info["timestamp"],
+                "index": index,
+                "batch_size": batch_info["batch_size"]
+            }
+            return JSONResponse(content=token, media_type="application/json")
+    raise HTTPException(status_code=404, detail="Proof token not found")
 
-    if file_hash not in data["batch"]:
-        return JSONResponse(status_code=404, content={"valid": False, "reason": "Hash not found in last batch"})
+@app.get("/tree")
+def merkle_tree_visualization():
+    if not MERKLE_TREE:
+        return HTMLResponse("<h2>No committed Merkle tree to show yet.</h2>")
+    html = "<h2>Merkle Tree Visualization</h2><ul>"
+    for level_num, level in enumerate(MERKLE_TREE):
+        html += f"<li>Level {level_num}:<br>" + ", ".join(level) + "</li>"
+    html += "</ul>"
+    return HTMLResponse(html)
 
-    index = data["batch"].index(file_hash)
-    proof = []
-    layer = data["tree"]["layers"][0]
-
-    for i in range(len(data["tree"]["layers"]) - 1):
-        sibling_index = index ^ 1
-        sibling = layer[sibling_index] if sibling_index < len(layer) else layer[index]
-        proof.append(sibling)
-        index = index // 2
-        layer = data["tree"]["layers"][i + 1]
-
+@app.get("/history")
+def commit_history():
     return {
-        "valid": True,
-        "file_hash": file_hash,
-        "merkle_root": data["merkle_root"],
-        "proof": proof,
-        "timestamp": data["timestamp"]
+        "commits": [
+            {
+                "merkle_root": c["merkle_root"],
+                "chained_root": c["chained_root"],
+                "timestamp": c["timestamp"],
+                "batch_size": c["batch_size"]
+            }
+            for c in COMMITTED_BATCHES
+        ]
     }
-
-
-# Graphical HTML visualization of current Merkle Tree
-@app.get("/tree", response_class=HTMLResponse)
-def show_tree():
-    if not os.path.exists(DATA_PATH):
-        return "<h3>No tree data found</h3>"
-
-    with open(DATA_PATH, "r") as f:
-        data = json.load(f)
-
-    html = """
-    <html>
-    <head>
-    <title>Merkle Tree Visualization</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; background: #f7f7f7; padding: 20px; }}
-        .layer {{ margin-bottom: 20px; }}
-        .layer-title {{ font-weight: bold; margin-bottom: 10px; }}
-        .hash-box {{
-            display: inline-block;
-            background: white;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            padding: 8px;
-            margin: 4px;
-            font-family: monospace;
-            font-size: 12px;
-            max-width: 420px;
-            overflow-wrap: break-word;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-        }}
-    </style>
-    </head>
-    <body>
-    <h2>Merkle Tree Visualization</h2>
-    <p><strong>Timestamp:</strong> {timestamp}</p>
-    <p><strong>Merkle Root:</strong> {root}</p>
-    <hr>
-    """.format(timestamp=data['timestamp'], root=data['merkle_root'])
-
-    for i, layer in enumerate(data['tree']['layers']):
-        html += f"<div class='layer'><div class='layer-title'>Layer {i}</div>"
-        for h in layer:
-            html += f"<div class='hash-box'>{h}</div>"
-        html += "</div>"
-
-    html += "</body></html>"
-    return html
